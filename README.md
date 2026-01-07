@@ -28,6 +28,8 @@
   <a href="https://github.com/mantrapatil03/phishing-detector/network/members">
     <img src="https://img.shields.io/github/forks/mantrapatil03/phishing-detector?style=social" alt="GitHub forks" />
   </a>
+  <br><br>
+  <img src="https://img.shields.io/github/v/release/mantrapatil03/phishing-detector?style=for-the-badge">
 </p>
 
 ---
