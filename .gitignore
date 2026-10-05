@@ -74,3 +74,9 @@ notebooks/*.ipynb_checkpoints/
 
 # Docker
 .dockerignore
+# Project datasets
+data/raw/
+data/processed/
+
+# Temporary backup files
+*.save

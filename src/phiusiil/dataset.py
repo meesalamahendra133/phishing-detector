@@ -1,7 +1,7 @@
 """
 PhiUSIIL dataset preparation.
 
-Loads the PhiUSIIL Phishing URL Dataset from UCI,
+Loads the local PhiUSIIL Phishing URL Dataset,
 removes duplicate URLs, selects the initial numerical
 feature set, and converts labels to the project's convention.
 
@@ -12,11 +12,17 @@ Project convention:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
-from ucimlrepo import fetch_ucirepo
 
 
-DATASET_ID = 967
+DATASET_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "raw"
+    / "PhiUSIIL_Phishing_URL_Dataset.csv"
+)
 
 FEATURE_COLUMNS = [
     "URLLength",
@@ -45,29 +51,30 @@ FEATURE_COLUMNS = [
 
 
 def load_phiusiil() -> pd.DataFrame:
-    """Load and prepare the PhiUSIIL dataset."""
+    """Load and prepare the local PhiUSIIL dataset."""
 
-    dataset = fetch_ucirepo(id=DATASET_ID)
+    if not DATASET_PATH.exists():
+        raise FileNotFoundError(
+            f"PhiUSIIL dataset not found at: {DATASET_PATH}"
+        )
 
-    features = dataset.data.features.copy()
-    targets = dataset.data.targets.copy()
-
-    df = pd.concat([features, targets], axis=1)
+    df = pd.read_csv(DATASET_PATH)
 
     required_columns = FEATURE_COLUMNS + ["URL", "label"]
+
     missing_columns = [
-        column for column in required_columns if column not in df.columns
+        column
+        for column in required_columns
+        if column not in df.columns
     ]
 
     if missing_columns:
         raise ValueError(
-            f"Required columns are missing from the dataset: {missing_columns}"
+            f"Required columns are missing from the dataset: "
+            f"{missing_columns}"
         )
 
-    # Remove duplicate URLs before any train/test split.
-    df = df.drop_duplicates(subset="URL", keep="first").copy()
-
-    # Verify that every URL has exactly one label.
+    # Check whether the same URL appears with different labels.
     conflicting_labels = (
         df.groupby("URL")["label"].nunique().gt(1).sum()
     )
@@ -77,6 +84,12 @@ def load_phiusiil() -> pd.DataFrame:
             f"Found {conflicting_labels} URLs with conflicting labels."
         )
 
+    # Remove duplicate URLs before model splitting.
+    df = df.drop_duplicates(
+        subset="URL",
+        keep="first",
+    ).copy()
+
     # UCI convention:
     #   0 = phishing
     #   1 = legitimate
@@ -84,12 +97,19 @@ def load_phiusiil() -> pd.DataFrame:
     # Project convention:
     #   0 = legitimate
     #   1 = phishing
-    df["label"] = df["label"].map({0: 1, 1: 0})
+    df["label"] = df["label"].map({
+        0: 1,
+        1: 0,
+    })
 
     if df["label"].isna().any():
-        raise ValueError("Unexpected label value found in the dataset.")
+        raise ValueError(
+            "Unexpected label value found in the dataset."
+        )
 
-    return df[["URL"] + FEATURE_COLUMNS + ["label"]].reset_index(drop=True)
+    return df[
+        ["URL"] + FEATURE_COLUMNS + ["label"]
+    ].reset_index(drop=True)
 
 
 def get_features_and_labels(

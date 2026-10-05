@@ -10,7 +10,7 @@ from sklearn.model_selection import train_test_split
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.20
-VALIDATION_SIZE = 0.20
+VALIDATION_SIZE = 0.16
 
 
 def split_dataset(
