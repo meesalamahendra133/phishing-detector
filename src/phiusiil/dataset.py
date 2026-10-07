@@ -43,10 +43,6 @@ FEATURE_COLUMNS = [
     "NoOfOtherSpecialCharsInURL",
     "SpacialCharRatioInURL",
     "IsHTTPS",
-    "URLSimilarityIndex",
-    "CharContinuationRate",
-    "TLDLegitimateProb",
-    "URLCharProb",
 ]
 
 
