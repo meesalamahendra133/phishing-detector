@@ -135,10 +135,12 @@ def extract_phiusiil_features(url: str) -> dict[str, float]:
 
     obfuscated_chars = _obfuscated_char_count(url)
 
+    suspicious_special_chars = set("@-_~%$!*'();,")
+
     special_chars = sum(
-    	1
-    	for char in url
-    	if not char.isalnum()
+        1
+        for char in url
+    if char in suspicious_special_chars
     )
 
     feature_values = {

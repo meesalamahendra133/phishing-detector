@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 
 import pandas as pd
-
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -13,102 +11,97 @@ from sklearn.metrics import (
     roc_auc_score,
     confusion_matrix,
 )
-
 from xgboost import XGBClassifier
+
+from src.phiusiil.dataset import FEATURE_COLUMNS
+from src.phiusiil.url_features import extract_phiusiil_features
 
 
 RANDOM_STATE = 42
 
+DATASET_PATH = (
+    "data/raw/PhiUSIIL_Phishing_URL_Dataset.csv"
+)
 
-FEATURE_COLUMNS = [
-    "URLLength",
-    "DomainLength",
-    "IsDomainIP",
-    "TLDLength",
-    "NoOfSubDomain",
-    "HasObfuscation",
-    "NoOfObfuscatedChar",
-    "ObfuscationRatio",
-    "NoOfLettersInURL",
-    "LetterRatioInURL",
-    "NoOfDegitsInURL",
-    "DegitRatioInURL",
-    "NoOfEqualsInURL",
-    "NoOfQMarkInURL",
-    "NoOfAmpersandInURL",
-    "NoOfOtherSpecialCharsInURL",
-    "SpacialCharRatioInURL",
-    "IsHTTPS",
-    "CharContinuationRate",
-    "TLDLegitimateProb",
-    "URLCharProb",
+MODEL_FEATURE_COLUMNS = [
+    feature
+    for feature in FEATURE_COLUMNS
+    if feature != "IsHTTPS"
 ]
 
 
 def extract_domain(url: str) -> str:
+    """Extract hostname/domain used for domain-level splitting."""
+
     url = str(url).strip().lower()
 
-    url = re.sub(r"^https?://", "", url)
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", url):
+        url = "http://" + url
 
-    domain = url.split("/")[0]
-    domain = domain.split("?")[0]
-    domain = domain.split("#")[0]
-    domain = domain.split(":")[0]
+    from urllib.parse import urlparse
 
-    return domain
+    parsed = urlparse(url)
+
+    return parsed.hostname or ""
 
 
-def evaluate_model(name, model, X_train, y_train, X_test, y_test):
+def extract_features(url: str) -> dict[str, float]:
+    """Extract the same features used during model inference."""
 
-    print("\n" + "=" * 60)
-    print(name)
-    print("=" * 60)
-
-    print("\nTraining model...")
-
-    model.fit(X_train, y_train)
-
-    predictions = model.predict(X_test)
-    probabilities = model.predict_proba(X_test)[:, 1]
-
-    accuracy = accuracy_score(y_test, predictions)
-    precision = precision_score(y_test, predictions)
-    recall = recall_score(y_test, predictions)
-    f1 = f1_score(y_test, predictions)
-    roc_auc = roc_auc_score(y_test, probabilities)
-
-    matrix = confusion_matrix(y_test, predictions)
-
-    print("\nResults:")
-    print(f"Accuracy : {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall   : {recall:.4f}")
-    print(f"F1-score : {f1:.4f}")
-    print(f"ROC-AUC  : {roc_auc:.4f}")
-
-    print("\nConfusion Matrix:")
-    print(matrix)
+    return extract_phiusiil_features(url)
 
 
 def main():
 
     print("=" * 60)
-    print("UNSEEN-DOMAIN PHISHING MODEL EVALUATION")
+    print("UNSEEN-DOMAIN EVALUATION")
+    print("17 FEATURES - WITHOUT HTTPS")
     print("=" * 60)
 
-    print("\n[1] Loading dataset...")
+    # --------------------------------------------------
+    # 1. Load raw dataset
+    # --------------------------------------------------
 
-    df = pd.read_csv(
-        "data/raw/PhiUSIIL_Phishing_URL_Dataset.csv"
+    print("\n[1] Loading raw dataset...")
+
+    df = pd.read_csv(DATASET_PATH)
+
+    print(f"Rows loaded: {len(df)}")
+
+    # --------------------------------------------------
+    # 2. Remove duplicate URLs
+    # --------------------------------------------------
+
+    print("\n[2] Removing duplicate URLs...")
+
+    conflicting_labels = (
+        df.groupby("URL")["label"]
+        .nunique()
+        .gt(1)
+        .sum()
     )
 
-    print(f"Total rows: {len(df)}")
+    if conflicting_labels:
+        raise ValueError(
+            f"Found {conflicting_labels} URLs with conflicting labels."
+        )
 
-    # Original PhiUSIIL labels:
+    df = df.drop_duplicates(
+        subset="URL",
+        keep="first",
+    ).copy()
+
+    print(f"Rows after duplicate removal: {len(df)}")
+
+    # --------------------------------------------------
+    # 3. Convert labels
+    # --------------------------------------------------
+
+    # Original PhiUSIIL:
     # 0 = phishing
     # 1 = legitimate
     #
-    # Convert to project convention:
+    # Project:
     # 0 = legitimate
     # 1 = phishing
 
@@ -117,45 +110,51 @@ def main():
         1: 0,
     })
 
-    print("\n[2] Extracting domains...")
-
-    df["domain"] = df["URL"].apply(extract_domain)
-
-    print(f"Unique domains: {df['domain'].nunique()}")
-
     # --------------------------------------------------
-    # Remove duplicate URL/domain-label conflicts
+    # 4. Extract domains
     # --------------------------------------------------
 
-    df = df.drop_duplicates(subset=["URL"])
+    print("\n[3] Extracting domains...")
 
-    conflicting = (
-        df.groupby("URL")["label"]
-        .nunique()
+    df["domain"] = df["URL"].apply(
+        extract_domain
     )
 
-    conflicting_urls = conflicting[conflicting > 1]
+    empty_domains = (
+        df["domain"].eq("")
+        .sum()
+    )
 
-    if len(conflicting_urls) > 0:
-        print(
-            f"WARNING: {len(conflicting_urls)} URLs "
-            "have conflicting labels."
+    if empty_domains:
+        raise ValueError(
+            f"Could not extract domains from "
+            f"{empty_domains} URLs."
         )
 
+    print(
+        f"Unique domains: "
+        f"{df['domain'].nunique()}"
+    )
+
     # --------------------------------------------------
-    # Domain-level split
+    # 5. Domain-level split
     # --------------------------------------------------
 
-    print("\n[3] Creating unseen-domain split...")
+    print("\n[4] Creating unseen-domain split...")
 
-    domains = df["domain"].drop_duplicates()
+    domains = (
+        df["domain"]
+        .drop_duplicates()
+        .sample(
+            frac=1,
+            random_state=RANDOM_STATE,
+        )
+        .reset_index(drop=True)
+    )
 
-    domains = domains.sample(
-        frac=1,
-        random_state=RANDOM_STATE,
-    ).reset_index(drop=True)
-
-    split_index = int(len(domains) * 0.80)
+    split_index = int(
+        len(domains) * 0.80
+    )
 
     train_domains = set(
         domains.iloc[:split_index]
@@ -173,23 +172,98 @@ def main():
         df["domain"].isin(test_domains)
     ].copy()
 
-    print(f"Training domains: {len(train_domains)}")
-    print(f"Testing domains : {len(test_domains)}")
+    print(
+        f"Training domains: "
+        f"{len(train_domains)}"
+    )
 
-    print(f"Training URLs   : {len(train_df)}")
-    print(f"Testing URLs    : {len(test_df)}")
+    print(
+        f"Testing domains : "
+        f"{len(test_domains)}"
+    )
+
+    print(
+        f"Training URLs   : "
+        f"{len(train_df)}"
+    )
+
+    print(
+        f"Testing URLs    : "
+        f"{len(test_df)}"
+    )
 
     # --------------------------------------------------
-    # Features
+    # 6. Extract model features
     # --------------------------------------------------
 
-    X_train = train_df[FEATURE_COLUMNS].copy()
-    y_train = train_df["label"].copy()
+    print("\n[5] Extracting URL features...")
 
-    X_test = test_df[FEATURE_COLUMNS].copy()
-    y_test = test_df["label"].copy()
+    X_train_records = []
 
-    print(f"\nFeatures used: {len(FEATURE_COLUMNS)}")
+    for index, url in enumerate(
+        train_df["URL"],
+        start=1,
+    ):
+
+        features = extract_features(url)
+
+        X_train_records.append(
+            {
+                feature: features[feature]
+                for feature in MODEL_FEATURE_COLUMNS
+            }
+        )
+
+        if index % 10000 == 0:
+            print(
+                f"Training features: "
+                f"{index}/{len(train_df)}"
+            )
+
+    X_test_records = []
+
+    for index, url in enumerate(
+        test_df["URL"],
+        start=1,
+    ):
+
+        features = extract_features(url)
+
+        X_test_records.append(
+            {
+                feature: features[feature]
+                for feature in MODEL_FEATURE_COLUMNS
+            }
+        )
+
+        if index % 10000 == 0:
+            print(
+                f"Testing features: "
+                f"{index}/{len(test_df)}"
+            )
+
+    X_train = pd.DataFrame(
+        X_train_records,
+        columns=MODEL_FEATURE_COLUMNS,
+    )
+
+    X_test = pd.DataFrame(
+        X_test_records,
+        columns=MODEL_FEATURE_COLUMNS,
+    )
+
+    y_train = train_df["label"].reset_index(
+        drop=True
+    )
+
+    y_test = test_df["label"].reset_index(
+        drop=True
+    )
+
+    print(
+        f"\nFeatures used: "
+        f"{len(MODEL_FEATURE_COLUMNS)}"
+    )
 
     print("\nTraining label distribution:")
     print(y_train.value_counts())
@@ -198,30 +272,12 @@ def main():
     print(y_test.value_counts())
 
     # --------------------------------------------------
-    # Random Forest
+    # 7. Train XGBoost
     # --------------------------------------------------
 
-    rf_model = RandomForestClassifier(
-        n_estimators=200,
-        random_state=RANDOM_STATE,
-        n_jobs=-1,
-        class_weight="balanced",
-    )
+    print("\n[6] Training XGBoost...")
 
-    evaluate_model(
-        "RANDOM FOREST - UNSEEN DOMAINS",
-        rf_model,
-        X_train,
-        y_train,
-        X_test,
-        y_test,
-    )
-
-    # --------------------------------------------------
-    # XGBoost
-    # --------------------------------------------------
-
-    xgb_model = XGBClassifier(
+    model = XGBClassifier(
         n_estimators=300,
         max_depth=6,
         learning_rate=0.1,
@@ -233,14 +289,105 @@ def main():
         n_jobs=-1,
     )
 
-    evaluate_model(
-        "XGBOOST - UNSEEN DOMAINS",
-        xgb_model,
+    model.fit(
         X_train,
         y_train,
-        X_test,
-        y_test,
     )
+
+    print("Training completed.")
+
+    # --------------------------------------------------
+    # 8. Evaluate
+    # --------------------------------------------------
+
+    print("\n[7] Evaluating on unseen domains...")
+
+    predictions = model.predict(
+        X_test
+    )
+
+    probabilities = model.predict_proba(
+        X_test
+    )[:, 1]
+
+    accuracy = accuracy_score(
+        y_test,
+        predictions,
+    )
+
+    precision = precision_score(
+        y_test,
+        predictions,
+    )
+
+    recall = recall_score(
+        y_test,
+        predictions,
+    )
+
+    f1 = f1_score(
+        y_test,
+        predictions,
+    )
+
+    roc_auc = roc_auc_score(
+        y_test,
+        probabilities,
+    )
+
+    matrix = confusion_matrix(
+        y_test,
+        predictions,
+    )
+
+    print("\n" + "=" * 60)
+    print("UNSEEN-DOMAIN XGBOOST RESULTS")
+    print("=" * 60)
+
+    print(
+        f"Accuracy : {accuracy:.4f}"
+    )
+
+    print(
+        f"Precision: {precision:.4f}"
+    )
+
+    print(
+        f"Recall   : {recall:.4f}"
+    )
+
+    print(
+        f"F1-score : {f1:.4f}"
+    )
+
+    print(
+        f"ROC-AUC  : {roc_auc:.4f}"
+    )
+
+    print("\nConfusion Matrix:")
+    print(matrix)
+
+    # --------------------------------------------------
+    # 9. Feature importance
+    # --------------------------------------------------
+
+    print("\n[8] Feature importance:")
+
+    feature_importance = sorted(
+        zip(
+            MODEL_FEATURE_COLUMNS,
+            model.feature_importances_,
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    for feature, importance in feature_importance:
+
+        print(
+            f"{feature:<30} "
+            f"{importance:.6f}"
+        )
 
     print("\n" + "=" * 60)
     print("UNSEEN-DOMAIN EVALUATION COMPLETED")
@@ -249,4 +396,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
